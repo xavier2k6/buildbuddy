@@ -97,6 +97,10 @@ func NewTestAuthenticator(testUsers map[string]interfaces.UserInfo) *TestAuthent
 	}
 }
 
+func (a *TestAuthenticator) PermitUnauthenticatedStuff() bool {
+	return true
+}
+
 func (a *TestAuthenticator) AdminGroupID() string {
 	return a.ServerAdminGroupID
 }
@@ -107,33 +111,6 @@ func (a *TestAuthenticator) AuthenticatedHTTPContext(w http.ResponseWriter, r *h
 		return r.Context()
 	}
 	return a.AuthContextFromAPIKey(r.Context(), apiKey)
-}
-
-func (a *TestAuthenticator) AuthenticatedGRPCContext(ctx context.Context) context.Context {
-	grpcMD, ok := metadata.FromIncomingContext(ctx)
-	if !ok {
-		return ctx
-	}
-	for _, apiKey := range grpcMD[APIKeyHeader] {
-		if apiKey == "" {
-			return ctx
-		}
-		jwt, err := a.TestJWTForAPIKey(apiKey)
-		if err != nil {
-			log.Errorf("Failed to mint JWT from API key: %s", err)
-			continue
-		}
-		return context.WithValue(ctx, jwtHeader, jwt)
-	}
-	for _, jwt := range grpcMD[jwtHeader] {
-		_, err := a.authenticateJWT(jwt)
-		if err != nil {
-			log.Errorf("Failed to authenticate incoming JWT: %s", err)
-			continue
-		}
-		return context.WithValue(ctx, jwtHeader, jwt)
-	}
-	return ctx
 }
 
 func (a *TestAuthenticator) authenticateJWT(token string) (interfaces.UserInfo, error) {
@@ -163,10 +140,13 @@ func (a *TestAuthenticator) AuthenticateGRPCRequest(ctx context.Context) (interf
 			return u, nil
 		}
 		for _, jwt := range grpcMD[jwtHeader] {
-			return a.authenticateJWT(jwt)
+			u, err := a.authenticateJWT(jwt)
+			if err == nil {
+				return u, nil
+			}
 		}
 	}
-	return nil, authutil.AnonymousUserError("gRPC request is missing credentials.")
+	return nil, status.UnauthenticatedError("No authentication credentials provided")
 }
 
 func (a *TestAuthenticator) AuthenticatedUser(ctx context.Context) (interfaces.UserInfo, error) {

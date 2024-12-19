@@ -291,6 +291,7 @@ func createAuthenticatorsFromConfig(ctx context.Context, env environment.Env, au
 }
 
 func newOpenIDAuthenticator(ctx context.Context, env environment.Env, oauthProviders []OauthProvider, adminGroupID string) (*OpenIDAuthenticator, error) {
+	fmt.Println("===== newOpenIDAuthenticator =====")
 	authenticators, err := createAuthenticatorsFromConfig(
 		ctx,
 		env,
@@ -436,6 +437,10 @@ func (a *OpenIDAuthenticator) getAuthCodeOptions(r *http.Request) []oauth2.AuthC
 	return options
 }
 
+func (a *OpenIDAuthenticator) PermitUnauthenticatedStuff() bool {
+	return false
+}
+
 func (a *OpenIDAuthenticator) lookupAPIKeyGroupFromAPIKey(ctx context.Context, apiKey string) (interfaces.APIKeyGroup, error) {
 	if apiKey == "" {
 		return nil, status.UnauthenticatedError("missing API key")
@@ -500,10 +505,6 @@ func (a *OpenIDAuthenticator) claimsFromAuthorityString(ctx context.Context, aut
 }
 
 func (a *OpenIDAuthenticator) AuthenticateGRPCRequest(ctx context.Context) (interfaces.UserInfo, error) {
-	return a.authenticateGRPCRequest(ctx, false /* acceptJWT= */)
-}
-
-func (a *OpenIDAuthenticator) authenticateGRPCRequest(ctx context.Context, acceptJWT bool) (*claims.Claims, error) {
 	p, ok := peer.FromContext(ctx)
 
 	if ok && p != nil && p.AuthInfo != nil {
@@ -547,22 +548,11 @@ func (a *OpenIDAuthenticator) authenticateGRPCRequest(ctx context.Context, accep
 		}
 	}
 
-	if acceptJWT {
-		// Check if we're already authenticated from incoming headers.
-		return claims.ClaimsFromContext(ctx)
-	}
+	// Check if we're already authenticated from incoming headers.
+	return claims.ClaimsFromContext(ctx)
 
-	return nil, authutil.AnonymousUserError("gRPC request is missing credentials.")
-}
-
-// AuthenticatedGRPCContext attempts to authenticate the gRPC request using peer info,
-// API key header, or basic auth headers.
-//
-// If none of the above information is provided, UnauthenticatedError is returned via the
-// `contextUserErrorKey` context value.
-func (a *OpenIDAuthenticator) AuthenticatedGRPCContext(ctx context.Context) context.Context {
-	c, err := a.authenticateGRPCRequest(ctx, true /* acceptJWT= */)
-	return claims.AuthContextFromClaims(ctx, c, err)
+	// TODO(iain): check if the error from above is ~the same as this one?
+	// return nil, authutil.AnonymousUserError("gRPC request is missing credentials.")
 }
 
 func (a *OpenIDAuthenticator) AuthenticatedHTTPContext(w http.ResponseWriter, r *http.Request) context.Context {

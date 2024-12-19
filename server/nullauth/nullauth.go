@@ -22,6 +22,10 @@ type NullAuthenticator struct {
 	anonymousUsageDisabled bool
 }
 
+func (a *NullAuthenticator) PermitUnauthenticatedStuff() bool {
+	return true
+}
+
 func (a *NullAuthenticator) AdminGroupID() string {
 	return a.adminGroupID
 }
@@ -40,10 +44,6 @@ func (a *NullAuthenticator) SSOEnabled() bool {
 
 func (a *NullAuthenticator) AuthenticatedHTTPContext(w http.ResponseWriter, r *http.Request) context.Context {
 	return r.Context()
-}
-
-func (a *NullAuthenticator) AuthenticatedGRPCContext(ctx context.Context) context.Context {
-	return ctx
 }
 
 func (a *NullAuthenticator) AuthenticatedUser(ctx context.Context) (interfaces.UserInfo, error) {
@@ -71,7 +71,7 @@ func (a *NullAuthenticator) AuthContextFromAPIKey(ctx context.Context, apiKey st
 }
 
 func (a *NullAuthenticator) AuthenticateGRPCRequest(ctx context.Context) (interfaces.UserInfo, error) {
-	return nil, nil
+	return nil, status.NotFoundError("Auth not implemented")
 }
 
 func (a *NullAuthenticator) TrustedJWTFromAuthContext(ctx context.Context) string {
