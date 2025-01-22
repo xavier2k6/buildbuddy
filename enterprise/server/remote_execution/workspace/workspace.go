@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 
 	_ "embed"
 
@@ -88,6 +89,7 @@ type Opts struct {
 	// UseOverlayfs specifies whether the workspace should use overlayfs to
 	// allow copy-on-write for workspace inputs.
 	UseOverlayfs bool
+	UseTmpfs     bool
 }
 
 // New creates a new workspace directly under the given parent directory.
@@ -109,6 +111,12 @@ func New(env environment.Env, parentDir string, opts *Opts) (*Workspace, error) 
 		if err != nil {
 			return nil, status.UnavailableErrorf("failed to create workspace overlayfs at %q: %s", rootDir, err)
 		}
+	}
+	if opts.UseTmpfs {
+		if err := syscall.Mount("", rootDir, "tmpfs", syscall.MS_RELATIME, "size=2G"); err != nil {
+			return nil, status.WrapError(err, "mount tmpfs")
+		}
+		log.Warningf("MOUNTED TMPFS AT %q", rootDir)
 	}
 	setDeleteLimit()
 	return &Workspace{
@@ -350,6 +358,13 @@ func (ws *Workspace) Remove(ctx context.Context) error {
 
 	if ws.overlay != nil {
 		return ws.overlay.Remove(ctx)
+	}
+
+	if ws.Opts.UseTmpfs {
+		if err := syscall.Unmount(ws.rootDir, 0); err != nil {
+			return status.WrapError(err, "unmount tmpfs")
+		}
+		return nil
 	}
 
 	errorChan := make(chan error)
