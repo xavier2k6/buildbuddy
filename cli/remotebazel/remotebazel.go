@@ -1140,6 +1140,9 @@ func parseArgs(commandLineArgs []string) (bazelArgs []string, execArgs []string,
 	if err != nil {
 		return nil, nil, err
 	}
+	parsedArgs, err := parser.ParseArgs(bazelArgs, nil)
+	if err != nil {
+		return nil
 	bazelArgs, err = parser.CanonicalizeArgs(bazelArgs)
 	if err != nil {
 		return nil, nil, err

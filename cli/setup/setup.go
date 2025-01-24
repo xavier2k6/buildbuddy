@@ -1,7 +1,6 @@
 package setup
 
 import (
-	"github.com/buildbuddy-io/buildbuddy/cli/arg"
 	"github.com/buildbuddy-io/buildbuddy/cli/login"
 	"github.com/buildbuddy-io/buildbuddy/cli/parser"
 	"github.com/buildbuddy-io/buildbuddy/cli/plugin"
@@ -20,15 +19,18 @@ func Setup(args []string, tempDir string) (_ []*plugin.Plugin, bazelArgs []strin
 	}
 
 	// Parse args.
-	bazelArgs, execArgs = arg.SplitExecutableArgs(args)
-	// TODO: Expanding configs results in a long explicit command line in the BB
-	// UI. Need to find a way to override the explicit command line in the UI so
-	// that it reflects the args passed to the CLI, not the wrapped Bazel
-	// process.
-	bazelArgs, err = parser.ExpandConfigs(bazelArgs)
+	parsedArgs, err := parser.ParseArgs(args, nil)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
+	parsedConfigs, err := parsedArgs.ConsumeAndParseRCFiles()
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	if err := parsedArgs.ExpandConfigs(parsedConfigs); err != nil {
+		return nil, nil, nil, nil, err
+	}
+
 
 	// Fiddle with Bazel args
 	// TODO(bduffany): model these as "built-in" plugins
@@ -44,12 +46,8 @@ func Setup(args []string, tempDir string) (_ []*plugin.Plugin, bazelArgs []strin
 	}
 
 	// Run plugin pre-bazel hooks
-	bazelArgs, err = parser.CanonicalizeArgs(bazelArgs)
-	if err != nil {
-		return nil, nil, nil, nil, err
-	}
 	for _, p := range plugins {
-		bazelArgs, execArgs, err = p.PreBazel(bazelArgs, execArgs)
+		parsedArgs, err = p.PreBazel(parsedArgs)
 		if err != nil {
 			return nil, nil, nil, nil, err
 		}
