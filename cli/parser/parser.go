@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 
@@ -451,17 +452,45 @@ func DecodeHelpFlagsAsProto(protoHelp string) (*bfpb.FlagCollection, error) {
 func GetOptionSetsfromProto(flagCollection *bfpb.FlagCollection) (map[string]*OptionSet, error) {
 	sets := make(map[string]*OptionSet)
 	for _, info := range flagCollection.FlagInfos {
-		if info.GetName() == "bazelrc" {
+		switch info.GetName() {
+		case "bazelrc":
 			// `bazel help flags-as-proto` incorrectly reports `bazelrc` as not
 			// allowing multiple values.
 			// See https://github.com/bazelbuild/bazel/issues/24730 for more info.
 			v := true
 			info.AllowsMultiple = &v
-		}
-		if info.GetName() == "experimental_convenience_symlinks" || info.GetName() == "subcommands" {
+		case "block_for_lock":
+			// `bazel help flags-as-proto` incorrectly reports `block_for_lock` as
+			// supporting non-startup commands, but in actuality it only has an effect
+			// as a startup option.
+			// See https://github.com/bazelbuild/bazel/pull/24953 for more info.
+			info.Commands = []string{"startup"}
+		case "watch_fs":
+			// `bazel help flags-as-proto` can report `watch_fs` as bring supported
+			// as a startup option, despite it being deprecated as a startup option
+			// and moved to only be supported as a command option.
+			//
+			// If it is supported as a command option, we remove "startup" from its
+			// list of supported commands. In newer versions of bazel (v8.0.0+), this
+			// is already true and thus this step is unnecessary.
+			if len(info.GetCommands()) > 1 {
+				commands := []string{}
+				for _, c := range info.GetCommands() {
+					if c != "startup" {
+						commands = append(commands, c)
+					}
+				}
+				info.Commands = commands
+			}
+		case "experimental_convenience_symlinks":
 			// `bazel help flags-as-proto` incorrectly reports
-			// `experimental_convenience_symlinks` and `subcommands` as not
-			// having negative forms.
+			// `experimental_convenience_symlinks` as not having a negative form.
+			// See https://github.com/bazelbuild/bazel/issues/24882 for more info.
+			v := true
+			info.HasNegativeFlag = &v
+		case "subcommands":
+			// `bazel help flags-as-proto` incorrectly reports `subcommands` as not
+			// having a negative form.
 			// See https://github.com/bazelbuild/bazel/issues/24882 for more info.
 			v := true
 			info.HasNegativeFlag = &v
@@ -634,7 +663,104 @@ func CanonicalizeOptions(options []*Option) ([]*Option, error) {
 		}
 		canonical = append(canonical, opt)
 	}
+	sort.SliceStable(canonical, func(i, j int) bool {
+		return canonical[i].OptionSchema.Name < canonical[j].OptionSchema.Name
+	})
 	return canonical, nil
+}
+
+func (p *ParsedArgs) CanonicalizeOptions() error {
+	startupOptions, err := CanonicalizeOptions(p.StartupOptions)
+	if err != nil {
+		return err
+	}
+	p.StartupOptions = startupOptions
+	commandOptions, err := CanonicalizeOptions(p.CommandOptions)
+	if err != nil {
+		return err
+	}
+	p.CommandOptions = commandOptions
+	return nil
+}
+
+func (p *ParsedArgs) GetOption(optionName string) ([]*Option, error) {
+	var matches []*Option
+	var optionSchema *OptionSchema
+	process := func(o *Option) error {
+		if o.OptionSchema.Name == optionName {
+			if optionSchema == nil {
+				optionSchema = o.OptionSchema
+				matches = append(matches, o)
+			} else if optionSchema != o.OptionSchema {
+				return fmt.Errorf("Found multiple options named '%s' with conflicting schemae.", optionName)
+			} else {
+				if optionSchema.Multi {
+					matches = append(matches, o)
+				} else {
+					matches[0] = o
+				}
+			}
+		}
+		return nil
+	}
+	for _, o := range p.StartupOptions {
+		if err := process(o); err != nil {
+			return nil, err
+		}
+	}
+	startupMatches := len(matches)
+	for _, o := range p.CommandOptions {
+		if err := process(o); err != nil {
+			return nil, err
+		}
+	}
+	if startupMatches != 0 && startupMatches != len(matches) {
+		return nil, fmt.Errorf("Found option '%s' in both the startup and the command options; cannot resolve value.", optionName)
+	}
+	return matches, nil
+}
+
+func (p *ParsedArgs) RemoveOption(optionName string) {
+	for i := len(p.StartupOptions) - 1; i >= 0; i-- {
+		if p.StartupOptions[i].OptionSchema.Name == optionName {
+			p.StartupOptions = append(p.StartupOptions[:i], p.StartupOptions[i+1:]...)
+		}
+	}
+	for i := len(p.CommandOptions) - 1; i >= 0; i-- {
+		if p.CommandOptions[i].OptionSchema.Name == optionName {
+			p.CommandOptions = append(p.CommandOptions[:i], p.CommandOptions[i+1:]...)
+		}
+	}
+}
+
+func (p *ParsedArgs) AppendOption(optionName, value string) error {
+	optionSets, err := OptionSets()
+	if err != nil {
+		return err
+	}
+	startupOptions := optionSets["startup"]
+	var startupOptionSchema *OptionSchema
+	if startupOptions != nil {
+		startupOptionSchema = startupOptions.ByName[optionName]
+	}
+	commandOptions := optionSets[p.Command]
+	var commandOptionSchema *OptionSchema
+	if commandOptions != nil {
+		commandOptionSchema = commandOptions.ByName[optionName]
+	}
+	if startupOptionSchema == nil && commandOptionSchema == nil {
+		return fmt.Errorf("No option schema found for option '%s'.", optionName)
+	}
+	if startupOptionSchema != nil && commandOptionSchema != nil {
+		return fmt.Errorf("Option schema found for option '%s' in both startup options and %s options, cannot resolve schema.", optionName, p.Command)
+	}
+	if startupOptionSchema != nil {
+		p.StartupOptions = append(p.StartupOptions, &Option{OptionSchema: startupOptionSchema, Value: value})
+	}
+	if commandOptionSchema != nil {
+		p.CommandOptions = append(p.CommandOptions, &Option{OptionSchema: commandOptionSchema, Value: value})
+	}
+	return nil
 }
 
 // runBazelHelpWithCache returns the `bazel help flags-as-proto` output for the
@@ -899,16 +1025,9 @@ func (p *ParsedArgs) ExpandConfigs(parsedConfigs map[string]*ParsedConfig) error
 	if err := p.expandConfigs(parsedConfigs); err != nil {
 		return err
 	}
-	startupOptions, err := CanonicalizeOptions(p.StartupOptions)
-	if err != nil {
+	if err := p.CanonicalizeOptions(); err != nil {
 		return err
 	}
-	p.StartupOptions = startupOptions
-	commandOptions, err := CanonicalizeOptions(p.CommandOptions)
-	if err != nil {
-		return err
-	}
-	p.CommandOptions = commandOptions
 	for i := 0; i < len(p.CommandOptions); {
 		if p.CommandOptions[i].OptionSchema.Name != enablePlatformSpecificConfigFlag {
 			i++

@@ -711,12 +711,7 @@ func (p *Plugin) PreBazel(parsedArgs *parser.ParsedArgs) (*parser.ParsedArgs, er
 	}
 	// Canonicalize args after each plugin is run, so that every plugin gets
 	// canonicalized args as input.
-	newParsedArgs.StartupOptions, err = parser.CanonicalizeOptions(newParsedArgs.StartupOptions)
-	if err != nil {
-		return nil, err
-	}
-	newParsedArgs.CommandOptions, err = parser.CanonicalizeOptions(newParsedArgs.CommandOptions)
-	if err != nil {
+	if err := newParsedArgs.CanonicalizeOptions(); err != nil {
 		return nil, err
 	}
 	return newParsedArgs, nil
