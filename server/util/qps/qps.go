@@ -1,38 +1,16 @@
 package qps
 
 import (
-	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/buildbuddy-io/buildbuddy/server/util/bucketer"
 )
 
-type bin struct {
-	c uint64
-}
-
-func (b *bin) Get() uint64 {
-	return atomic.LoadUint64(&b.c)
-}
-func (b *bin) Add(d uint64) {
-	atomic.AddUint64(&b.c, d)
-}
-func (b *bin) Inc() {
-	b.Add(1)
-}
-func (b *bin) Reset() {
-	atomic.StoreUint64(&b.c, 0)
-}
+const numBuckets = 60
 
 type Counter struct {
-	counts [60]bin
-	idx    uint64
-	// The number of bins that should be included in the average. After the
-	// first full averaging period elapses, this will always equal len(counts).
-	nValidBins uint64
-	window     time.Duration
-	startOnce  sync.Once
-	ticker     <-chan time.Time
-	stop       chan struct{}
+	bucketer *bucketer.Bucketer[*atomic.Uint64]
 }
 
 // NewCounter returns a QPS counter using the given duration as the averaging
@@ -47,69 +25,34 @@ func NewCounterForTesting(window time.Duration, ticker <-chan time.Time) *Counte
 }
 
 func new(window time.Duration, ticker <-chan time.Time) *Counter {
-	return &Counter{
-		nValidBins: 1,
-		window:     window,
-		ticker:     ticker,
-		stop:       make(chan struct{}),
+	reset := func(value *atomic.Uint64) *atomic.Uint64 {
+		if value == nil {
+			return &atomic.Uint64{}
+		}
+		value.Store(0)
+		return value
 	}
-}
-
-func (c *Counter) bin(idx int) *bin {
-	b := &(c.counts[idx])
-	return b
-}
-
-func (c *Counter) currentBin() *bin {
-	idx := atomic.LoadUint64(&c.idx)
-	return c.bin(int(idx))
+	return &Counter{
+		bucketer: bucketer.NewBucketer[*atomic.Uint64](window, numBuckets, reset, ticker),
+	}
 }
 
 func (c *Counter) Get() float64 {
 	sum := uint64(0)
-	nValidBins := atomic.LoadUint64(&c.nValidBins)
-	for i := 0; i < int(nValidBins); i++ {
-		sum += c.bin(i).Get()
+	buckets := c.bucketer.Buckets()
+	for _, bucket := range c.bucketer.Buckets() {
+		sum += bucket.Load()
 	}
-	binDurationSec := float64(c.window) * 1e-9 / float64(len(c.counts))
-	summedDurationSec := binDurationSec * float64(nValidBins)
+	binDurationSec := float64(c.bucketer.BucketSize()) * 1e-9 / float64(numBuckets)
+	summedDurationSec := binDurationSec * float64(len(buckets))
 	qps := float64(sum) / float64(summedDurationSec)
 	return qps
 }
 
-func (c *Counter) start() {
-	if c.ticker == nil {
-		ticker := time.NewTicker(time.Duration(float64(c.window) / float64(len(c.counts))))
-		c.ticker = ticker.C
-		defer ticker.Stop()
-	}
-	for {
-		select {
-		case <-c.stop:
-			return
-		case <-c.ticker:
-		}
-		// Advance to the next bin, reset its current count, and mark it valid
-		// if we haven't done so already.
-		idx := atomic.LoadUint64(&c.idx)
-		idx = (idx + 1) % uint64(len(c.counts))
-		atomic.StoreUint64(&c.idx, idx)
-
-		c.bin(int(idx)).Reset()
-
-		nv := atomic.LoadUint64(&c.nValidBins)
-		nv = min(nv+1, uint64(len(c.counts)))
-		atomic.StoreUint64(&c.nValidBins, nv)
-	}
-}
-
 func (c *Counter) Stop() {
-	close(c.stop)
+	c.bucketer.Stop()
 }
 
 func (c *Counter) Inc() {
-	c.startOnce.Do(func() {
-		go c.start()
-	})
-	c.currentBin().Inc()
+	c.bucketer.Get().Add(1)
 }
