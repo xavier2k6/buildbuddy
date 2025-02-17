@@ -38,7 +38,7 @@ cache resource name to stdout.
 
 The resource can be downloaded using 'bb download':
 
-	bb fetch <url> | xargs bb download
+	bb remote-download <url> | xargs bb download
 
 The "checksum.sri" qualifier can be used to specify a checksum.
 Example:
