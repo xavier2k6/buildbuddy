@@ -1180,7 +1180,7 @@ func (s *ExecutionServer) cacheActionResult(ctx context.Context, actionResourceN
 func (s *ExecutionServer) markTaskComplete(ctx context.Context, actionResourceName *digest.ResourceName, executeResponse *repb.ExecuteResponse, action *repb.Action, cmd *repb.Command, properties *platform.Properties) error {
 	execErr := gstatus.ErrorProto(executeResponse.GetStatus())
 	router := s.env.GetTaskRouter()
-	if router != nil && !executeResponse.GetCachedResult() {{
+	if router != nil && !executeResponse.GetCachedResult() {
 		executorHostID := executeResponse.GetResult().GetExecutionMetadata().GetWorker()
 		if execErr == nil && executeResponse.GetResult().GetExitCode() == 0 {
 			router.MarkSucceeded(ctx, action, cmd, actionResourceName.GetInstanceName(), executorHostID)
