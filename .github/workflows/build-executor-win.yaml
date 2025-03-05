@@ -14,6 +14,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Mount Bazel cache
+        uses: actions/cache@v4
+        with:
+          path: "D:/bazel/repo-cache/"
+          key: repo-cache
+
+      - name: Mount Go cache
+        uses: actions/cache@v4
+        with:
+          path: "D:/go-mod-cache/"
+          key: go-mod-cache-${{ runner.os }}-${{ hashFiles('MODULE.bazel', 'WORKSPACE', 'go.mod', 'go.sum', 'deps.bzl') }}
+          restore-keys: go-mod-cache-${{ runner.os }}-
+
       # This step would list out all files under $vs2022Path for debugging purposes.
       # - name: "Find CL"
       #   shell: pwsh # Use PowerShell for better cross-platform compatibility
