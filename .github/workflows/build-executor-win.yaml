@@ -9,6 +9,9 @@ jobs:
   build:
     runs-on: windows-2022
     if: "!contains(github.event.head_commit.message, 'ci skip')"
+    env:
+      GO_REPOSITORY_USE_HOST_CACHE: 1
+      GOMODCACHE: 'D:/go-mod-cache'
 
     steps:
       - name: Checkout
